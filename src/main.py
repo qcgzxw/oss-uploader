@@ -315,7 +315,7 @@ class SettingsDialog(QDialog):
         except Exception as e:
             QMessageBox.critical(self, "失败", f"❌ 连接失败:\n{str(e)}")
         finally:
-            self.btn_check.setText("🔌 连通性测试")
+            self.btn_check.setText("连通性测试")
             self.btn_check.setEnabled(True)
 
     def save_and_close(self):
