@@ -17,7 +17,7 @@ from PyQt5.QtGui import QFont, QIcon, QDesktopServices, QCursor
 # --- 常量配置 ---
 CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".aliyun_oss_uploader_config.json")
 HISTORY_FILE = os.path.join(os.path.expanduser("~"), ".aliyun_oss_history.json")
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 
 
 # 资源路径
