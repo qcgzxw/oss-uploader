@@ -2,7 +2,6 @@ import sys
 import os
 import json
 import uuid
-from urllib.parse import urlparse
 
 import oss2
 import datetime
@@ -12,15 +11,136 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QMessageBox, QFileDialog, QComboBox, QCheckBox,
                              QTabWidget, QGroupBox, QHBoxLayout, QTableWidget,
                              QTableWidgetItem, QHeaderView, QAbstractItemView,
-                             QProgressBar, QMenu, QAction, QStyle, QSpinBox)
+                             QProgressBar, QMenu, QAction, QStyle, QSpinBox, QFrame)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QUrl
-from PyQt5.QtGui import QFont, QIcon, QDesktopServices, QCursor
+from PyQt5.QtGui import QFont, QIcon, QDesktopServices, QCursor, QColor
 
 # --- 常量配置 ---
 CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".aliyun_oss_uploader_config.json")
 HISTORY_FILE = os.path.join(os.path.expanduser("~"), ".aliyun_oss_history.json")
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 
+STYLESHEET = """
+/* === 全局基础设置 === */
+QWidget {
+    font-family: "Microsoft YaHei UI", "Segoe UI", Roboto, sans-serif;
+    font-size: 14px;
+    color: #333333;
+    outline: none;
+}
+QMainWindow, QDialog { background-color: #F5F7FA; }
+
+/* === 卡片容器 (去除无效 box-shadow) === */
+QFrame#CardFrame {
+    background-color: #FFFFFF;
+    border-radius: 12px;
+    border: 1px solid #E6E9ED;
+}
+
+/* === 标题与状态 === */
+QLabel#TitleLabel { font-size: 20px; font-weight: bold; color: #2C3E50; }
+QLabel#StatusLabel { color: #7F8C8D; font-size: 13px; }
+
+/* === 按钮通用样式 === */
+QPushButton {
+    background-color: #FFFFFF;
+    border: 1px solid #DCDFE6;
+    border-radius: 6px;
+    padding: 8px 16px;
+    color: #606266;
+}
+QPushButton:hover { background-color: #ECF5FF; color: #409EFF; border-color: #C6E2FF; }
+QPushButton:pressed { background-color: #D9ECFF; border-color: #3A8EE6; }
+QPushButton:disabled { background-color: #F2F6FC; border-color: #EBEEF5; color: #C0C4CC; }
+
+/* === 主按钮 (蓝色) === */
+QPushButton#PrimaryButton { background-color: #409EFF; border: 1px solid #409EFF; color: #FFFFFF; }
+QPushButton#PrimaryButton:hover { background-color: #66B1FF; border-color: #66B1FF; }
+QPushButton#PrimaryButton:pressed { background-color: #3A8EE6; border-color: #3A8EE6; }
+
+/* === 危险按钮 (红色) === */
+QPushButton#DangerButton:hover { color: #F56C6C; background-color: #FEF0F0; border-color: #FBC4C4; }
+
+/* === 批量复制按钮 (带下拉箭头) 的特殊修复 === */
+QPushButton#DropdownButton {
+    background-color: #409EFF; border: 1px solid #409EFF; color: #FFFFFF;
+    text-align: center;
+}
+QPushButton#DropdownButton::menu-indicator {
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    right: 10px;
+    width: 10px;
+    image: none;
+}
+QPushButton#DropdownButton:hover { background-color: #66B1FF; }
+
+/* === 下拉菜单美化 (QMenu) === */
+QMenu {
+    background-color: #FFFFFF;
+    border: 1px solid #EBEEF5;
+    border-radius: 4px;
+    padding: 5px 0;
+}
+QMenu::item {
+    padding: 8px 30px 8px 20px; /* 上下8，右30，左20 */
+    background-color: transparent;
+    color: #606266;
+}
+QMenu::item:selected {
+    background-color: #ECF5FF;
+    color: #409EFF;
+}
+
+/* === 输入框与下拉框 === */
+QLineEdit, QComboBox {
+    border: 1px solid #DCDFE6; border-radius: 4px; padding: 6px; background: #FFFFFF;
+}
+QLineEdit:focus, QComboBox:focus { border-color: #409EFF; }
+
+/* === 数字输入框 === */
+QSpinBox {
+    border: 1px solid #DCDFE6;
+    border-radius: 4px;
+    padding: 6px;
+    background: #FFFFFF;
+    selection-background-color: #409EFF;
+}
+/* === 表格内的按钮 (历史记录/操作列) === */
+QTableWidget QPushButton {
+    background-color: #FFFFFF;
+    border: 1px solid #DCDFE6;
+    color: #606266;
+    padding: 4px 8px; /* 减小内边距 */
+    font-size: 12px;  /* 减小字号 */
+    border-radius: 4px;
+    min-height: 20px;
+}
+QTableWidget QPushButton:hover {
+    border-color: #409EFF;
+    color: #409EFF;
+}
+
+/* === 拖拽区 === */
+QLabel#DropArea {
+    border: 2px dashed #DCDFE6; border-radius: 12px; background-color: #FFFFFF;
+    color: #909399; font-size: 16px; font-weight: bold;
+}
+QLabel#DropArea:hover { border-color: #409EFF; background-color: #F2F6FC; color: #409EFF; }
+
+/* === 弹窗 === */
+QMessageBox {
+    background-color: #F5F7FA;
+}
+QMessageBox QLabel {
+    color: #333333;
+    padding: 15px; /* 增加文字周围间距 */
+    font-size: 14px;
+}
+QMessageBox QPushButton {
+    width: 80px; /* 统一按钮宽度 */
+}
+"""
 
 # 资源路径
 def resource_path(relative_path):
@@ -227,9 +347,13 @@ class HistoryWindow(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("上传历史记录")
-        self.resize(700, 500)
-        layout = QVBoxLayout(self)
+        self.resize(800, 600)
+        self.setup_ui()
+        self.load_data()
 
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
         self.table = QTableWidget()
         self.table.setColumnCount(4)
         self.table.setHorizontalHeaderLabels(["时间", "文件名", "链接 (双击打开)", "操作"])
@@ -239,12 +363,20 @@ class HistoryWindow(QDialog):
         self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Fixed)
         self.table.setColumnWidth(1, 200)
         self.table.setColumnWidth(3, 80)
+        # 美化表格
+        self.table.verticalHeader().setVisible(False)
+        self.table.setShowGrid(False)
+        self.table.setAlternatingRowColors(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.cellDoubleClicked.connect(self.on_cell_double_clicked)
+
         layout.addWidget(self.table)
 
-        self.load_data()
+        btn_close = QPushButton("关闭")
+        btn_close.setFixedSize(100, 36)
+        btn_close.clicked.connect(self.close)
+        layout.addWidget(btn_close, alignment=Qt.AlignRight)
 
     def load_data(self):
         records = HistoryManager.load_history()
@@ -253,16 +385,18 @@ class HistoryWindow(QDialog):
             self.table.setItem(row, 0, QTableWidgetItem(record.get('date', '')))
             self.table.setItem(row, 1, QTableWidgetItem(record.get('filename', '')))
             url_item = QTableWidgetItem(record.get('url', ''))
-            url_item.setForeground(Qt.blue)
+            url_item.setForeground(QColor("#409EFF"))
             url_item.setData(Qt.UserRole, record.get('url', ''))
             self.table.setItem(row, 2, url_item)
 
             btn_copy = QPushButton("复制")
             btn_copy.setCursor(Qt.PointingHandCursor)
             btn_copy.clicked.connect(lambda _, u=record.get('url', ''): self.copy_link(u))
+
             container = QWidget()
             l = QHBoxLayout(container)
-            l.setContentsMargins(2, 2, 2, 2)
+            l.setContentsMargins(4, 4, 4, 4)
+            l.setAlignment(Qt.AlignCenter)  # 居中对齐
             l.addWidget(btn_copy)
             self.table.setCellWidget(row, 3, container)
 
@@ -273,7 +407,7 @@ class HistoryWindow(QDialog):
 
     def copy_link(self, url):
         QApplication.clipboard().setText(url)
-
+        QMessageBox.information(self, "复制成功", "链接已复制到剪切板")
 
 # --- 设置对话框 ---
 class SettingsDialog(QDialog):
@@ -286,6 +420,9 @@ class SettingsDialog(QDialog):
 
     def init_ui(self):
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(25, 25, 25, 25)
+        layout.setSpacing(15)
+
         tabs = QTabWidget()
         tabs.addTab(self.create_auth_tab(), "账号设置")
         tabs.addTab(self.create_pref_tab(), "上传偏好")
@@ -293,12 +430,17 @@ class SettingsDialog(QDialog):
 
         btn_layout = QHBoxLayout()
         self.btn_check = QPushButton("连通性测试")
+        self.btn_check.setMinimumWidth(120)
         self.btn_check.setIcon(self.style().standardIcon(QStyle.SP_DriveNetIcon))
         self.btn_check.clicked.connect(self.check_connection)
+
         self.btn_save = QPushButton("保存配置")
+        self.btn_save.setObjectName("PrimaryButton")  # 蓝色高亮
+        self.btn_save.setMinimumWidth(120)
         self.btn_save.setDefault(True)
         self.btn_save.setIcon(self.style().standardIcon(QStyle.SP_DialogSaveButton))
         self.btn_save.clicked.connect(self.save_and_close)
+
         btn_layout.addWidget(self.btn_check)
         btn_layout.addStretch()
         btn_layout.addWidget(self.btn_save)
@@ -307,6 +449,8 @@ class SettingsDialog(QDialog):
     def create_auth_tab(self):
         widget = QWidget()
         form = QFormLayout(widget)
+        form.setSpacing(15)
+        form.setContentsMargins(20, 30, 20, 20)
 
         self.btn_import = QPushButton(" 从剪切板导入配置")
         self.btn_import.setIcon(self.style().standardIcon(QStyle.SP_FileDialogDetailedView))
@@ -320,6 +464,7 @@ class SettingsDialog(QDialog):
         form.addRow("AccessKey Secret *:", self.input_sk)
         self.input_bucket = QLineEdit(self.config.get('bucket_name'))
         form.addRow("Bucket Name *:", self.input_bucket)
+
         self.combo_endpoint = QComboBox()
         self.combo_endpoint.setEditable(True)
         for name, host in ALIYUN_ENDPOINTS: self.combo_endpoint.addItem(f"{name} ({host})", host)
@@ -332,20 +477,28 @@ class SettingsDialog(QDialog):
             else:
                 self.combo_endpoint.setCurrentText(curr)
         form.addRow("Endpoint *:", self.combo_endpoint)
+
         self.input_domain = QLineEdit(self.config.get('custom_domain'))
+        self.input_domain.setPlaceholderText("可选，如 https://cdn.example.com")
         form.addRow("自定义域名:", self.input_domain)
         return widget
 
     def create_pref_tab(self):
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        group_path = QGroupBox("保存路径")
+        layout.setContentsMargins(20, 30, 20, 20)
+        layout.setSpacing(20)
+
+        group_path = QGroupBox("路径设置")
         form_path = QFormLayout(group_path)
         self.input_path = QLineEdit(self.config.get('upload_path'))
-        form_path.addRow("规则:", self.input_path)
+        form_path.addRow("保存规则:", self.input_path)
         layout.addWidget(group_path)
-        group_behavior = QGroupBox("选项")
+
+        group_behavior = QGroupBox("高级选项")
         vbox = QVBoxLayout(group_behavior)
+        vbox.setSpacing(15)
+
         time_layout = QHBoxLayout()
         self.spin_expire = QSpinBox()
         self.spin_expire.setRange(0, 315360000)  # 0 到 10年
@@ -366,6 +519,7 @@ class SettingsDialog(QDialog):
         self.check_random.setChecked(self.config.get('use_random_name', False))
         self.check_copy = QCheckBox("自动复制第一个文件的链接")
         self.check_copy.setChecked(self.config.get('auto_copy', True))
+
         vbox.addWidget(self.check_random)
         vbox.addWidget(self.check_copy)
         layout.addWidget(group_behavior)
@@ -441,83 +595,121 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(f"阿里云 OSS 上传工具 v{VERSION}")
-        self.resize(650, 550)
+        self.resize(900, 650)
 
         icon_path = resource_path(os.path.join('assets', 'icon.ico'))
         if os.path.exists(icon_path): self.setWindowIcon(QIcon(icon_path))
+
         self.setAcceptDrops(True)
-
-        central = QWidget()
-        self.setCentralWidget(central)
-        layout = QVBoxLayout(central)
-        layout.setSpacing(10)
-
-        # 顶部
-        top_bar = QHBoxLayout()
-        self.lbl_status = QLabel("准备就绪")
-        self.lbl_status.setStyleSheet("color: #666;")
-        self.btn_history = QPushButton("历史")
-        self.btn_history.setIcon(self.style().standardIcon(QStyle.SP_FileDialogDetailedView))
-        self.btn_history.clicked.connect(self.open_history)
-        self.btn_settings = QPushButton("设置")
-        self.btn_settings.setIcon(self.style().standardIcon(QStyle.SP_ComputerIcon))
-        self.btn_settings.clicked.connect(self.open_settings)
-        top_bar.addWidget(self.lbl_status)
-        top_bar.addStretch()
-        top_bar.addWidget(self.btn_history)
-        top_bar.addWidget(self.btn_settings)
-        layout.addLayout(top_bar)
-
-        # 拖拽区
-        self.drop_area = QLabel("\n点击添加文件\n或\n拖拽文件至此\n")
-        self.drop_area.setAlignment(Qt.AlignCenter)
-        self.drop_area.setStyleSheet("""
-            QLabel { border: 2px dashed #aaa; border-radius: 10px; background: #f9f9f9; color: #555; font-size: 16px; }
-            QLabel:hover { border-color: #4CAF50; background: #e8f5e9; }
-        """)
-        self.drop_area.setFixedHeight(100)
-        self.drop_area.mousePressEvent = self.open_file_dialog
-        layout.addWidget(self.drop_area)
-
-        # 任务列表 (替代原来的文本框)
-        layout.addWidget(QLabel("上传任务列表:"))
-        self.task_table = QTableWidget()
-        self.task_table.setColumnCount(4)
-        self.task_table.setHorizontalHeaderLabels(["文件名", "状态/进度", "链接", "操作"])
-        self.task_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Interactive)  # 文件名可调
-        self.task_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Fixed)  # 进度条固定
-        self.task_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)  # 链接自适应
-        self.task_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Fixed)  # 操作固定
-        self.task_table.setColumnWidth(0, 200)
-        self.task_table.setColumnWidth(1, 100)
-        self.task_table.setColumnWidth(3, 80)
-        self.task_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.task_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        layout.addWidget(self.task_table)
-
-        # 底部按钮
-        btn_layout = QHBoxLayout()
-        self.btn_copy_menu = QPushButton("📋 批量复制 ▼")
-        self.btn_copy_menu.setCursor(Qt.PointingHandCursor)
-        # 菜单
-        menu = QMenu(self)
-        action_urls = QAction("复制所有链接 (URL)", self)
-        action_urls.triggered.connect(lambda: self.copy_all(mode="url"))
-        action_markdown = QAction("复制 Markdown 格式 (![]...)", self)
-        action_markdown.triggered.connect(lambda: self.copy_all(mode="markdown"))
-        menu.addAction(action_urls)
-        menu.addAction(action_markdown)
-        self.btn_copy_menu.setMenu(menu)
-
-        self.btn_clear = QPushButton("🗑️ 清空列表")
-        self.btn_clear.clicked.connect(self.clear_table)
-
-        btn_layout.addWidget(self.btn_copy_menu)
-        btn_layout.addWidget(self.btn_clear)
-        layout.addLayout(btn_layout)
+        self.setup_ui()
 
         QTimer.singleShot(100, self.startup_checks)
-        self.tasks_data = {}  # 存储 url 用于批量复制 {row_index: {'filename':..., 'url':...}}
+        self.tasks_data = {}
+
+    def setup_ui(self):
+        central = QWidget()
+        self.setCentralWidget(central)
+
+        # 主布局
+        main_layout = QVBoxLayout(central)
+        main_layout.setContentsMargins(30, 30, 30, 30)
+        main_layout.setSpacing(20)
+
+        # 1. Header (标题 + 顶部按钮)
+        header_layout = QHBoxLayout()
+
+        title_box = QVBoxLayout()
+        self.lbl_title = QLabel("OSS Uploader")
+        self.lbl_title.setObjectName("TitleLabel")
+        self.lbl_status = QLabel("Ready to upload")
+        self.lbl_status.setObjectName("StatusLabel")
+        title_box.addWidget(self.lbl_title)
+        title_box.addWidget(self.lbl_status)
+
+        header_layout.addLayout(title_box)
+        header_layout.addStretch()
+
+        self.btn_history = QPushButton(" 历史记录")
+        self.btn_history.setIcon(self.style().standardIcon(QStyle.SP_FileDialogDetailedView))
+        self.btn_history.setMinimumHeight(38)
+        self.btn_history.clicked.connect(self.open_history)
+
+        self.btn_settings = QPushButton(" 设置")
+        self.btn_settings.setIcon(self.style().standardIcon(QStyle.SP_ComputerIcon))
+        self.btn_settings.setMinimumHeight(38)
+        self.btn_settings.clicked.connect(self.open_settings)
+
+        header_layout.addWidget(self.btn_history)
+        header_layout.addWidget(self.btn_settings)
+        main_layout.addLayout(header_layout)
+
+        # 2. Content Card (白色卡片)
+        card = QFrame()
+        card.setObjectName("CardFrame")  # 关键：应用卡片样式
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(25, 25, 25, 25)
+        card_layout.setSpacing(20)
+
+        # 拖拽区
+        self.drop_area = QLabel("\n点击选择文件 或 拖拽至此\n(支持批量上传)")
+        self.drop_area.setObjectName("DropArea")
+        self.drop_area.setAlignment(Qt.AlignCenter)
+        self.drop_area.setFixedHeight(120)
+        self.drop_area.setCursor(Qt.PointingHandCursor)
+        self.drop_area.mousePressEvent = self.open_file_dialog
+        card_layout.addWidget(self.drop_area)
+
+        # 表格
+        self.task_table = QTableWidget()
+        self.task_table.setColumnCount(4)
+        self.task_table.setHorizontalHeaderLabels(["文件名", "进度", "链接", "操作"])
+        self.task_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Interactive)
+        self.task_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Fixed)
+        self.task_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.task_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Fixed)
+        self.task_table.setColumnWidth(0, 240)
+        self.task_table.setColumnWidth(1, 140)
+        self.task_table.setColumnWidth(3, 100)
+
+        # 表格美化
+        self.task_table.verticalHeader().setVisible(False)
+        self.task_table.setShowGrid(False)
+        self.task_table.setAlternatingRowColors(False)
+        self.task_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.task_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+
+        card_layout.addWidget(self.task_table)
+
+        # 3. Action Bar (底部按钮)
+        action_layout = QHBoxLayout()
+
+        self.btn_copy_menu = QPushButton("批量复制")
+        self.btn_copy_menu.setObjectName("DropdownButton")
+        self.btn_copy_menu.setIcon(self.style().standardIcon(QStyle.SP_DialogApplyButton))
+        self.btn_copy_menu.setMinimumHeight(38)
+        self.btn_copy_menu.setCursor(Qt.PointingHandCursor)
+
+        menu = QMenu(self)
+        action_urls = QAction("复制所有链接 (URL)", self)
+        action_markdown = QAction("复制 Markdown 格式", self)
+        menu.addAction(action_urls)
+        menu.addAction(action_markdown)
+        action_urls.triggered.connect(lambda: self.copy_all(mode="url"))
+        action_markdown.triggered.connect(lambda: self.copy_all(mode="markdown"))
+        self.btn_copy_menu.setMenu(menu)
+
+        self.btn_clear = QPushButton(" 清空列表")
+        self.btn_clear.setObjectName("DangerButton")
+        self.btn_clear.setIcon(self.style().standardIcon(QStyle.SP_TrashIcon))
+        self.btn_clear.setMinimumHeight(38)
+        self.btn_clear.clicked.connect(self.clear_table)
+
+        action_layout.addWidget(self.btn_copy_menu)
+        action_layout.addStretch()
+        action_layout.addWidget(self.btn_clear)
+
+        card_layout.addLayout(action_layout)
+        main_layout.addWidget(card)
 
     def startup_checks(self):
         # 1. 检查本地配置是否存在
@@ -693,7 +885,8 @@ class MainWindow(QMainWindow):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    font = QFont("Microsoft YaHei" if sys.platform == "win32" else "Arial", 10)
+    app.setStyleSheet(STYLESHEET)
+    font = QFont("Microsoft YaHei UI", 10)  # 统一字体
     app.setFont(font)
     window = MainWindow()
     window.show()
