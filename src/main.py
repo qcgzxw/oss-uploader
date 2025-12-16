@@ -6,17 +6,30 @@ import oss2
 import datetime
 import getpass
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
-                             QLabel, QPushButton, QProgressBar, QDialog,
-                             QLineEdit, QFormLayout, QMessageBox, QFileDialog,
-                             QComboBox, QCheckBox, QTabWidget, QGroupBox, QHBoxLayout, QStyle)
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
-from PyQt5.QtGui import QFont
+                             QLabel, QPushButton, QDialog, QLineEdit, QFormLayout,
+                             QMessageBox, QFileDialog, QComboBox, QCheckBox,
+                             QTabWidget, QGroupBox, QHBoxLayout, QTableWidget,
+                             QTableWidgetItem, QHeaderView, QAbstractItemView,
+                             QProgressBar, QMenu, QAction, QStyle)
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QUrl
+from PyQt5.QtGui import QFont, QIcon, QDesktopServices, QCursor
 
 # --- 常量配置 ---
 CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".aliyun_oss_uploader_config.json")
-VERSION = "1.1.0"
+HISTORY_FILE = os.path.join(os.path.expanduser("~"), ".aliyun_oss_history.json")
+VERSION = "1.3.0"
 
-# 阿里云区域列表 (用于下拉框)
+
+# 资源路径
+def resource_path(relative_path):
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
+
+# 阿里云区域
 ALIYUN_ENDPOINTS = [
     ("华东1（杭州）", "oss-cn-hangzhou.aliyuncs.com"),
     ("华东2（上海）", "oss-cn-shanghai.aliyuncs.com"),
@@ -35,6 +48,33 @@ ALIYUN_ENDPOINTS = [
 ]
 
 
+# --- 历史记录 ---
+class HistoryManager:
+    @staticmethod
+    def load_history():
+        if os.path.exists(HISTORY_FILE):
+            try:
+                with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except:
+                return []
+        return []
+
+    @staticmethod
+    def add_record(filename, url):
+        records = HistoryManager.load_history()
+        new_record = {
+            "date": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "filename": filename,
+            "url": url
+        }
+        records.insert(0, new_record)
+        if len(records) > 500: records = records[:500]
+        with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
+            json.dump(records, f, indent=4, ensure_ascii=False)
+
+
+# --- 配置管理 ---
 class ConfigManager:
     @staticmethod
     def get_default_config():
@@ -44,8 +84,7 @@ class ConfigManager:
             "endpoint": "oss-cn-hangzhou.aliyuncs.com",
             "bucket_name": "",
             "custom_domain": "",
-            # 新增配置
-            "upload_path": "uploads/{username}/{year}/{month}",
+            "upload_path": "uploads/{year}/{month}",
             "use_random_name": False,
             "auto_copy": True
         }
@@ -56,7 +95,6 @@ class ConfigManager:
             try:
                 with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
                     config = json.load(f)
-                    # 合并默认配置，防止旧版本配置文件缺少新字段报错
                     default = ConfigManager.get_default_config()
                     default.update(config)
                     return default
@@ -71,7 +109,6 @@ class ConfigManager:
 
     @staticmethod
     def validate_clipboard_data(text):
-        """尝试解析剪切板内容是否为配置Json"""
         try:
             data = json.loads(text)
             required_keys = ["access_key_id", "access_key_secret", "bucket_name"]
@@ -82,115 +119,167 @@ class ConfigManager:
         return None
 
 
-# --- 上传线程 ---
-class UploadThread(QThread):
-    progress_signal = pyqtSignal(int)
-    success_signal = pyqtSignal(str)
-    error_signal = pyqtSignal(str)
+# --- 批量上传线程 ---
+class BatchUploadThread(QThread):
+    # index: 列表中的索引
+    progress_signal = pyqtSignal(int, int)  # index, percent
+    success_signal = pyqtSignal(int, str, str)  # index, filename, url
+    error_signal = pyqtSignal(int, str)  # index, error_msg
+    all_finished_signal = pyqtSignal()
 
-    def __init__(self, file_path, config):
+    def __init__(self, file_paths, config):
         super().__init__()
-        self.file_path = file_path
+        self.file_paths = file_paths
         self.config = config
+        self.is_running = True
 
-    def get_object_name(self):
-        """根据配置生成云端存储路径"""
-        filename = os.path.basename(self.file_path)
+    def get_object_name(self, original_path):
+        filename = os.path.basename(original_path)
         ext = os.path.splitext(filename)[1]
 
-        # 1. 处理文件名 (随机 or 原名)
         if self.config.get('use_random_name'):
             final_name = f"{uuid.uuid4().hex}{ext}"
         else:
             final_name = filename
 
-        # 2. 处理目录路径
         path_pattern = self.config.get('upload_path', '')
-        # 替换占位符
         now = datetime.datetime.now()
         username = getpass.getuser()
 
-        # 简单替换逻辑
         folder = path_pattern.replace("{username}", username) \
             .replace("{year}", now.strftime("%Y")) \
             .replace("{month}", now.strftime("%m")) \
-            .replace("{day}", now.strftime("%d")) \
-            .replace("{YY}", now.strftime("%y")) \
-            .replace("{MM}", now.strftime("%m"))
-
-        # 去除首尾斜杠并组合
+            .replace("{day}", now.strftime("%d"))
         folder = folder.strip('/')
-        if folder:
-            return f"{folder}/{final_name}"
+        if folder: return f"{folder}/{final_name}"
         return final_name
 
     def run(self):
         try:
             auth = oss2.Auth(self.config['access_key_id'], self.config['access_key_secret'])
             endpoint = self.config['endpoint']
-            if not endpoint.startswith('http'):
-                endpoint = 'https://' + endpoint
-
+            if not endpoint.startswith('http'): endpoint = 'https://' + endpoint
             bucket = oss2.Bucket(auth, endpoint, self.config['bucket_name'])
-            object_name = self.get_object_name()
-
-            def percentage(consumed_bytes, total_bytes):
-                if total_bytes:
-                    rate = int(100 * (float(consumed_bytes) / float(total_bytes)))
-                    self.progress_signal.emit(rate)
-
-            # 执行上传
-            bucket.put_object_from_file(object_name, self.file_path, progress_callback=percentage)
-
-            # 生成链接
-            domain = self.config.get('custom_domain', '').strip()
-            if domain:
-                if not domain.startswith('http'):
-                    domain = 'https://' + domain
-                if domain.endswith('/'):
-                    domain = domain[:-1]
-                url = f"{domain}/{object_name}"
-            else:
-                clean_endpoint = self.config['endpoint'].replace('http://', '').replace('https://', '')
-                url = f"https://{self.config['bucket_name']}.{clean_endpoint}/{object_name}"
-
-            self.success_signal.emit(url)
-
         except Exception as e:
-            self.error_signal.emit(str(e))
+            # 如果初始化失败，所有文件都报错
+            for i in range(len(self.file_paths)):
+                self.error_signal.emit(i, f"初始化失败: {str(e)}")
+            self.all_finished_signal.emit()
+            return
+
+        for idx, file_path in enumerate(self.file_paths):
+            if not self.is_running: break
+
+            file_name = os.path.basename(file_path)
+            try:
+                object_name = self.get_object_name(file_path)
+
+                def percentage(consumed_bytes, total_bytes):
+                    if total_bytes:
+                        rate = int(100 * (float(consumed_bytes) / float(total_bytes)))
+                        self.progress_signal.emit(idx, rate)
+
+                bucket.put_object_from_file(object_name, file_path, progress_callback=percentage)
+
+                # 生成链接
+                domain = self.config.get('custom_domain', '').strip()
+                if domain:
+                    if not domain.startswith('http'): domain = 'https://' + domain
+                    if domain.endswith('/'): domain = domain[:-1]
+                    url = f"{domain}/{object_name}"
+                else:
+                    clean_endpoint = self.config['endpoint'].replace('http://', '').replace('https://', '')
+                    url = f"https://{self.config['bucket_name']}.{clean_endpoint}/{object_name}"
+
+                HistoryManager.add_record(file_name, url)
+                self.success_signal.emit(idx, file_name, url)
+
+            except Exception as e:
+                self.error_signal.emit(idx, str(e))
+
+        self.all_finished_signal.emit()
+
+    def stop(self):
+        self.is_running = False
 
 
-# --- 设置对话框 (重构版) ---
+# --- 历史记录窗口 ---
+class HistoryWindow(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("上传历史记录")
+        self.resize(700, 500)
+        layout = QVBoxLayout(self)
+
+        self.table = QTableWidget()
+        self.table.setColumnCount(4)
+        self.table.setHorizontalHeaderLabels(["时间", "文件名", "链接 (双击打开)", "操作"])
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Interactive)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Fixed)
+        self.table.setColumnWidth(1, 200)
+        self.table.setColumnWidth(3, 80)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.cellDoubleClicked.connect(self.on_cell_double_clicked)
+        layout.addWidget(self.table)
+
+        self.load_data()
+
+    def load_data(self):
+        records = HistoryManager.load_history()
+        self.table.setRowCount(len(records))
+        for row, record in enumerate(records):
+            self.table.setItem(row, 0, QTableWidgetItem(record.get('date', '')))
+            self.table.setItem(row, 1, QTableWidgetItem(record.get('filename', '')))
+            url_item = QTableWidgetItem(record.get('url', ''))
+            url_item.setForeground(Qt.blue)
+            url_item.setData(Qt.UserRole, record.get('url', ''))
+            self.table.setItem(row, 2, url_item)
+
+            btn_copy = QPushButton("复制")
+            btn_copy.setCursor(Qt.PointingHandCursor)
+            btn_copy.clicked.connect(lambda _, u=record.get('url', ''): self.copy_link(u))
+            container = QWidget()
+            l = QHBoxLayout(container)
+            l.setContentsMargins(2, 2, 2, 2)
+            l.addWidget(btn_copy)
+            self.table.setCellWidget(row, 3, container)
+
+    def on_cell_double_clicked(self, row, col):
+        if col == 2:
+            url = self.table.item(row, col).data(Qt.UserRole)
+            if url: QDesktopServices.openUrl(QUrl(url))
+
+    def copy_link(self, url):
+        QApplication.clipboard().setText(url)
+
+
+# --- 设置对话框 ---
 class SettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("阿里云 OSS 配置设置")
-        self.resize(450, 400)
-
+        self.setWindowTitle("OSS 配置")
+        self.resize(450, 420)
         self.config = ConfigManager.load_config()
         self.init_ui()
 
     def init_ui(self):
         layout = QVBoxLayout(self)
-
-        # 使用 Tab 页签分类
         tabs = QTabWidget()
         tabs.addTab(self.create_auth_tab(), "账号设置")
         tabs.addTab(self.create_pref_tab(), "上传偏好")
         layout.addWidget(tabs)
 
-        # 底部按钮区
         btn_layout = QHBoxLayout()
-
         self.btn_check = QPushButton("连通性测试")
         self.btn_check.setIcon(self.style().standardIcon(QStyle.SP_DriveNetIcon))
         self.btn_check.clicked.connect(self.check_connection)
-
         self.btn_save = QPushButton("保存配置")
-        self.btn_save.setDefault(True)  # 回车默认触发
+        self.btn_save.setDefault(True)
         self.btn_save.setIcon(self.style().standardIcon(QStyle.SP_DialogSaveButton))
         self.btn_save.clicked.connect(self.save_and_close)
-
         btn_layout.addWidget(self.btn_check)
         btn_layout.addStretch()
         btn_layout.addWidget(self.btn_save)
@@ -199,131 +288,70 @@ class SettingsDialog(QDialog):
     def create_auth_tab(self):
         widget = QWidget()
         form = QFormLayout(widget)
-        form.setSpacing(10)
-
-        # AK
         self.input_ak = QLineEdit(self.config.get('access_key_id'))
-        form.addRow("AccessKey ID <font color='red'>*</font>:", self.input_ak)
-
-        # SK
+        form.addRow("AccessKey ID *:", self.input_ak)
         self.input_sk = QLineEdit(self.config.get('access_key_secret'))
         self.input_sk.setEchoMode(QLineEdit.Password)
-        form.addRow("AccessKey Secret <font color='red'>*</font>:", self.input_sk)
-
-        # Bucket
+        form.addRow("AccessKey Secret *:", self.input_sk)
         self.input_bucket = QLineEdit(self.config.get('bucket_name'))
-        form.addRow("Bucket Name <font color='red'>*</font>:", self.input_bucket)
-
-        # Endpoint (下拉框)
+        form.addRow("Bucket Name *:", self.input_bucket)
         self.combo_endpoint = QComboBox()
-        self.combo_endpoint.setEditable(True)  # 允许用户手动输入，兼容私有云或未列出的节点
-        current_endpoint = self.config.get('endpoint', '')
-
-        # 填充数据
-        found = False
-        for name, host in ALIYUN_ENDPOINTS:
-            self.combo_endpoint.addItem(f"{name} ({host})", host)
-            if host == current_endpoint:
-                self.combo_endpoint.setCurrentIndex(self.combo_endpoint.count() - 1)
-                found = True
-
-        if not found and current_endpoint:
-            self.combo_endpoint.addItem(current_endpoint, current_endpoint)
-            self.combo_endpoint.setCurrentText(current_endpoint)
-
-        form.addRow("Endpoint (地域) <font color='red'>*</font>:", self.combo_endpoint)
-
-        # Domain
+        self.combo_endpoint.setEditable(True)
+        for name, host in ALIYUN_ENDPOINTS: self.combo_endpoint.addItem(f"{name} ({host})", host)
+        curr = self.config.get('endpoint', '')
+        if curr: self.combo_endpoint.setCurrentText(curr)
+        form.addRow("Endpoint *:", self.combo_endpoint)
         self.input_domain = QLineEdit(self.config.get('custom_domain'))
-        self.input_domain.setPlaceholderText("https://cdn.example.com")
-        form.addRow("自定义域名 (选填):", self.input_domain)
-
+        form.addRow("自定义域名:", self.input_domain)
         return widget
 
     def create_pref_tab(self):
         widget = QWidget()
         layout = QVBoxLayout(widget)
-
-        # 路径设置
         group_path = QGroupBox("保存路径")
         form_path = QFormLayout(group_path)
         self.input_path = QLineEdit(self.config.get('upload_path'))
-        self.input_path.setPlaceholderText("例如: uploads/{year}/{month}")
-        label_hint = QLabel("支持占位符: {year}, {month}, {day}, {username}")
-        label_hint.setStyleSheet("color: gray; font-size: 10px;")
-        form_path.addRow("路径规则:", self.input_path)
-        form_path.addRow("", label_hint)
+        form_path.addRow("规则:", self.input_path)
         layout.addWidget(group_path)
-
-        # 行为设置
-        group_behavior = QGroupBox("行为选项")
+        group_behavior = QGroupBox("选项")
         vbox = QVBoxLayout(group_behavior)
-
-        self.check_random = QCheckBox("启用随机文件名 (使用UUID，防止同名覆盖)")
+        self.check_random = QCheckBox("启用随机文件名 (UUID)")
         self.check_random.setChecked(self.config.get('use_random_name', False))
-
-        self.check_copy = QCheckBox("上传完成后自动复制链接")
+        self.check_copy = QCheckBox("自动复制第一个文件的链接")
         self.check_copy.setChecked(self.config.get('auto_copy', True))
-
         vbox.addWidget(self.check_random)
         vbox.addWidget(self.check_copy)
         layout.addWidget(group_behavior)
-
         layout.addStretch()
         return widget
 
-    def get_current_endpoint(self):
-        # 获取下拉框实际的 data (host)，如果是手输的则取 text
+    def get_endpoint(self):
         host = self.combo_endpoint.currentData()
         if not host:
-            # 如果是手输或编辑过的，data可能是None，需要解析
             text = self.combo_endpoint.currentText()
-            # 简单的逻辑：如果包含括号，尝试取括号内的，否则取全部
-            if "(" in text and ")" in text:
-                import re
-                match = re.search(r'\((.*?)\)', text)
-                if match:
-                    return match.group(1)
+            import re
+            match = re.search(r'\((.*?)\)', text)
+            if match: return match.group(1)
             return text
         return host
 
     def check_connection(self):
-        ak = self.input_ak.text().strip()
-        sk = self.input_sk.text().strip()
-        bucket_name = self.input_bucket.text().strip()
-        endpoint = self.get_current_endpoint()
-
-        if not ak or not sk or not bucket_name or not endpoint:
-            QMessageBox.warning(self, "参数缺失", "请先填写标红的必填项。")
-            return
-
-        self.btn_check.setText("测试中...")
-        self.btn_check.setEnabled(False)
-        QApplication.processEvents()  # 刷新界面
-
         try:
-            auth = oss2.Auth(ak, sk)
-            real_endpoint = endpoint if endpoint.startswith('http') else f'https://{endpoint}'
-            bucket = oss2.Bucket(auth, real_endpoint, bucket_name)
-            # 尝试获取Bucket信息来验证权限
+            auth = oss2.Auth(self.input_ak.text().strip(), self.input_sk.text().strip())
+            ep = self.get_endpoint()
+            ep = ep if ep.startswith('http') else f'https://{ep}'
+            bucket = oss2.Bucket(auth, ep, self.input_bucket.text().strip())
             bucket.get_bucket_info()
-            QMessageBox.information(self, "成功", "✅ 连接成功！参数配置正确。")
-        except oss2.exceptions.ServerError as e:
-            QMessageBox.critical(self, "失败", f"❌ 服务端错误: {e.status}\n可能Endpoint错误或Bucket不存在")
-        except oss2.exceptions.AccessDenied as e:
-            QMessageBox.critical(self, "失败", f"❌ 权限拒绝: AccessDenied\n请检查 AK/SK 是否正确")
+            QMessageBox.information(self, "成功", "连接成功！")
         except Exception as e:
-            QMessageBox.critical(self, "失败", f"❌ 连接失败:\n{str(e)}")
-        finally:
-            self.btn_check.setText("连通性测试")
-            self.btn_check.setEnabled(True)
+            QMessageBox.critical(self, "失败", str(e))
 
     def save_and_close(self):
         data = {
             "access_key_id": self.input_ak.text().strip(),
             "access_key_secret": self.input_sk.text().strip(),
             "bucket_name": self.input_bucket.text().strip(),
-            "endpoint": self.get_current_endpoint(),
+            "endpoint": self.get_endpoint(),
             "custom_domain": self.input_domain.text().strip(),
             "upload_path": self.input_path.text().strip(),
             "use_random_name": self.check_random.isChecked(),
@@ -337,164 +365,230 @@ class SettingsDialog(QDialog):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("阿里云 OSS 上传工具")
-        self.resize(500, 380)
+        self.setWindowTitle(f"阿里云 OSS 上传工具 v{VERSION}")
+        self.resize(650, 550)
+
+        icon_path = resource_path(os.path.join('assets', 'icon.ico'))
+        if os.path.exists(icon_path): self.setWindowIcon(QIcon(icon_path))
         self.setAcceptDrops(True)
 
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        layout = QVBoxLayout(central_widget)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(15)
+        central = QWidget()
+        self.setCentralWidget(central)
+        layout = QVBoxLayout(central)
+        layout.setSpacing(10)
 
-        # 顶部栏
-        top_layout = QHBoxLayout()
-        self.lbl_status = QLabel("就绪")
-        self.lbl_status.setStyleSheet("color: gray;")
-        self.btn_settings = QPushButton("⚙️ 设置")
-        self.btn_settings.setFixedSize(80, 30)
+        # 顶部
+        top_bar = QHBoxLayout()
+        self.lbl_status = QLabel("准备就绪")
+        self.lbl_status.setStyleSheet("color: #666;")
+        self.btn_history = QPushButton("历史")
+        self.btn_history.setIcon(self.style().standardIcon(QStyle.SP_FileDialogDetailedView))
+        self.btn_history.clicked.connect(self.open_history)
+        self.btn_settings = QPushButton("设置")
+        self.btn_settings.setIcon(self.style().standardIcon(QStyle.SP_ComputerIcon))
         self.btn_settings.clicked.connect(self.open_settings)
-        top_layout.addWidget(self.lbl_status)
-        top_layout.addStretch()
-        top_layout.addWidget(self.btn_settings)
-        layout.addLayout(top_layout)
+        top_bar.addWidget(self.lbl_status)
+        top_bar.addStretch()
+        top_bar.addWidget(self.btn_history)
+        top_bar.addWidget(self.btn_settings)
+        layout.addLayout(top_bar)
 
-        # 拖拽区域
-        self.drop_area = QLabel("\n点击或拖拽文件至此\n")
+        # 拖拽区
+        self.drop_area = QLabel("\n点击添加文件\n或\n拖拽文件至此\n")
         self.drop_area.setAlignment(Qt.AlignCenter)
         self.drop_area.setStyleSheet("""
-            QLabel {
-                border: 2px dashed #aaa;
-                border-radius: 10px;
-                background-color: #f9f9f9;
-                color: #555;
-                font-size: 16px;
-            }
-            QLabel:hover {
-                border-color: #4CAF50;
-                background-color: #e8f5e9;
-            }
+            QLabel { border: 2px dashed #aaa; border-radius: 10px; background: #f9f9f9; color: #555; font-size: 16px; }
+            QLabel:hover { border-color: #4CAF50; background: #e8f5e9; }
         """)
-        self.drop_area.setFixedHeight(150)
+        self.drop_area.setFixedHeight(100)
         self.drop_area.mousePressEvent = self.open_file_dialog
         layout.addWidget(self.drop_area)
 
-        # 进度条
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setValue(0)
-        self.progress_bar.hide()
-        layout.addWidget(self.progress_bar)
+        # 任务列表 (替代原来的文本框)
+        layout.addWidget(QLabel("上传任务列表:"))
+        self.task_table = QTableWidget()
+        self.task_table.setColumnCount(4)
+        self.task_table.setHorizontalHeaderLabels(["文件名", "状态/进度", "链接", "操作"])
+        self.task_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Interactive)  # 文件名可调
+        self.task_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Fixed)  # 进度条固定
+        self.task_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)  # 链接自适应
+        self.task_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Fixed)  # 操作固定
+        self.task_table.setColumnWidth(0, 200)
+        self.task_table.setColumnWidth(1, 100)
+        self.task_table.setColumnWidth(3, 80)
+        self.task_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.task_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        layout.addWidget(self.task_table)
 
-        # 结果框
-        self.result_input = QLineEdit()
-        self.result_input.setPlaceholderText("上传成功后链接显示于此")
-        self.result_input.setReadOnly(True)
-        layout.addWidget(self.result_input)
+        # 底部按钮
+        btn_layout = QHBoxLayout()
+        self.btn_copy_menu = QPushButton("📋 批量复制 ▼")
+        self.btn_copy_menu.setCursor(Qt.PointingHandCursor)
+        # 菜单
+        menu = QMenu(self)
+        action_urls = QAction("复制所有链接 (URL)", self)
+        action_urls.triggered.connect(lambda: self.copy_all(mode="url"))
+        action_markdown = QAction("复制 Markdown 格式 (![]...)", self)
+        action_markdown.triggered.connect(lambda: self.copy_all(mode="markdown"))
+        menu.addAction(action_urls)
+        menu.addAction(action_markdown)
+        self.btn_copy_menu.setMenu(menu)
 
-        # 复制按钮
-        self.btn_copy = QPushButton("复制链接")
-        self.btn_copy.setEnabled(False)
-        self.btn_copy.clicked.connect(self.manual_copy)
-        layout.addWidget(self.btn_copy)
+        self.btn_clear = QPushButton("🗑️ 清空列表")
+        self.btn_clear.clicked.connect(self.clear_table)
 
-        # 初始化检查
+        btn_layout.addWidget(self.btn_copy_menu)
+        btn_layout.addWidget(self.btn_clear)
+        layout.addLayout(btn_layout)
+
         QTimer.singleShot(100, self.startup_checks)
+        self.tasks_data = {}  # 存储 url 用于批量复制 {row_index: {'filename':..., 'url':...}}
 
     def startup_checks(self):
-        # 1. 检查配置是否存在
         config = ConfigManager.load_config()
         if not config.get('access_key_id'):
-            # 2. 检查剪切板是否有配置
-            clipboard = QApplication.clipboard()
-            text = clipboard.text()
-            imported_data = ConfigManager.validate_clipboard_data(text)
-
-            if imported_data:
-                reply = QMessageBox.question(self, "检测到配置",
-                                             "剪切板中似乎包含 OSS 配置信息，是否自动导入？",
-                                             QMessageBox.Yes | QMessageBox.No)
-                if reply == QMessageBox.Yes:
-                    # 合并默认配置以防缺失字段
-                    full_config = ConfigManager.get_default_config()
-                    full_config.update(imported_data)
-                    ConfigManager.save_config(full_config)
-                    QMessageBox.information(self, "成功", "配置已导入！")
-                    return
-
             self.open_settings()
 
     def open_settings(self):
-        dialog = SettingsDialog(self)
-        dialog.exec_()
-        # 设置关闭后，刷新一下当前状态文案等（可选）
+        SettingsDialog(self).exec_()
+
+    def open_history(self):
+        HistoryWindow(self).exec_()
 
     def open_file_dialog(self, event):
-        file_path, _ = QFileDialog.getOpenFileName(self, "选择文件")
-        if file_path:
-            self.start_upload(file_path)
+        files, _ = QFileDialog.getOpenFileNames(self, "选择文件")
+        if files: self.start_batch_upload(files)
 
-    def dragEnterEvent(self, event):
-        if event.mimeData().hasUrls():
-            event.accept()
+    def dragEnterEvent(self, e):
+        if e.mimeData().hasUrls():
+            e.accept()
         else:
-            event.ignore()
+            e.ignore()
 
-    def dropEvent(self, event):
-        urls = event.mimeData().urls()
-        if urls:
-            file_path = urls[0].toLocalFile()
-            if os.path.isfile(file_path):
-                self.start_upload(file_path)
+    def dropEvent(self, e):
+        files = [u.toLocalFile() for u in e.mimeData().urls() if os.path.isfile(u.toLocalFile())]
+        if files: self.start_batch_upload(files)
 
-    def start_upload(self, file_path):
+    def start_batch_upload(self, file_paths):
         config = ConfigManager.load_config()
-        if not config.get('access_key_id'):
-            QMessageBox.warning(self, "错误", "请先配置 OSS 参数")
-            return
+        if not config.get('access_key_id'): return QMessageBox.warning(self, "错误", "请先配置")
 
-        # UI 重置
-        self.drop_area.setText(f"正在上传:\n{os.path.basename(file_path)}")
-        self.progress_bar.show()
-        self.progress_bar.setValue(0)
-        self.btn_copy.setEnabled(False)
-        self.btn_copy.setText("复制链接")  # 修复：每次上传前重置文案
-        self.result_input.clear()
         self.drop_area.setEnabled(False)
-        self.lbl_status.setText("🚀 上传中...")
+        self.tasks_data = {}  # 重置数据
+        self.task_table.setRowCount(0)  # 清空旧表
+        self.task_table.setRowCount(len(file_paths))
 
-        self.thread = UploadThread(file_path, config)
-        self.thread.progress_signal.connect(self.progress_bar.setValue)
-        self.thread.success_signal.connect(self.upload_finished)
-        self.thread.error_signal.connect(self.upload_error)
+        # 初始化表格行
+        for i, path in enumerate(file_paths):
+            fname = os.path.basename(path)
+            # 1. 文件名
+            self.task_table.setItem(i, 0, QTableWidgetItem(fname))
+            # 2. 进度条 (初始)
+            pbar = QProgressBar()
+            pbar.setRange(0, 100)
+            pbar.setValue(0)
+            pbar.setTextVisible(False)
+            pbar.setStyleSheet(
+                "QProgressBar { border: 0px; background-color: #eee; border-radius: 4px; } QProgressBar::chunk { background-color: #4CAF50; border-radius: 4px; }")
+            container = QWidget()
+            pl = QVBoxLayout(container)
+            pl.setContentsMargins(5, 5, 5, 5)
+            pl.addWidget(pbar)
+            self.task_table.setCellWidget(i, 1, container)
+            # 3. 链接 (空)
+            self.task_table.setItem(i, 2, QTableWidgetItem("等待中..."))
+            # 4. 操作 (禁用)
+            btn = QPushButton("复制")
+            btn.setEnabled(False)
+            container_btn = QWidget()
+            bl = QVBoxLayout(container_btn)
+            bl.setContentsMargins(2, 2, 2, 2)
+            bl.addWidget(btn)
+            self.task_table.setCellWidget(i, 3, container_btn)
+
+        self.lbl_status.setText(f"正在上传 {len(file_paths)} 个文件...")
+
+        self.thread = BatchUploadThread(file_paths, config)
+        self.thread.progress_signal.connect(self.update_row_progress)
+        self.thread.success_signal.connect(self.on_row_success)
+        self.thread.error_signal.connect(self.on_row_error)
+        self.thread.all_finished_signal.connect(self.on_all_finished)
         self.thread.start()
 
-    def upload_finished(self, url):
-        self.progress_bar.hide()
-        self.drop_area.setEnabled(True)
-        self.drop_area.setText("\n点击或拖拽文件至此\n")
-        self.result_input.setText(url)
-        self.btn_copy.setEnabled(True)
-        self.lbl_status.setText("✅ 上传完成")
+    def update_row_progress(self, idx, percent):
+        # 获取 CellWidget 里的 ProgressBar
+        widget = self.task_table.cellWidget(idx, 1)
+        if widget:
+            pbar = widget.findChild(QProgressBar)
+            if pbar: pbar.setValue(percent)
 
-        # 自动复制逻辑
+    def on_row_success(self, idx, fname, url):
+        # 更新链接列
+        item_url = QTableWidgetItem(url)
+        item_url.setForeground(Qt.blue)
+        self.task_table.setItem(idx, 2, item_url)
+
+        # 更新按钮
+        widget = self.task_table.cellWidget(idx, 3)
+        if widget:
+            btn = widget.findChild(QPushButton)
+            if btn:
+                btn.setEnabled(True)
+                btn.setCursor(Qt.PointingHandCursor)
+                # 绑定复制
+                try:
+                    btn.clicked.disconnect()
+                except:
+                    pass
+                btn.clicked.connect(lambda: self.copy_single(url, btn))
+
+        # 记录数据
+        self.tasks_data[idx] = {'filename': fname, 'url': url}
+
+    def on_row_error(self, idx, msg):
+        self.task_table.setItem(idx, 2, QTableWidgetItem(f"失败: {msg}"))
+        self.task_table.item(idx, 2).setForeground(Qt.red)
+
+    def on_all_finished(self):
+        self.drop_area.setEnabled(True)
+        self.lbl_status.setText("✅ 队列处理完成")
+
+        # 自动复制逻辑 (只复制链接)
         config = ConfigManager.load_config()
-        if config.get('auto_copy', True):
-            self.manual_copy(auto=True)
+        if config.get('auto_copy', True) and self.tasks_data:
+            self.copy_all(mode="url", silent=True)
+            self.lbl_status.setText("✅ 已自动复制链接到剪切板")
 
-    def upload_error(self, msg):
-        self.progress_bar.hide()
-        self.drop_area.setEnabled(True)
-        self.drop_area.setText("上传失败")
-        self.lbl_status.setText("❌ 上传失败")
-        QMessageBox.critical(self, "错误", msg)
+    def copy_single(self, url, btn):
+        QApplication.clipboard().setText(url)
+        original_text = btn.text()
+        btn.setText("已复制")
+        QTimer.singleShot(1000, lambda: btn.setText(original_text))
 
-    def manual_copy(self, auto=False):
-        QApplication.clipboard().setText(self.result_input.text())
-        self.btn_copy.setText("已复制！")
-        if auto:
-            # 自动复制时，给个明显的反馈
-            self.lbl_status.setText("✅ 已自动复制链接")
+    def copy_all(self, mode="url", silent=False):
+        if not self.tasks_data: return
 
+        # 按索引排序，保证顺序和上传顺序一致
+        sorted_indices = sorted(self.tasks_data.keys())
+        lines = []
+        for i in sorted_indices:
+            data = self.tasks_data[i]
+            if mode == "url":
+                lines.append(data['url'])
+            elif mode == "markdown":
+                # Markdown 格式: ![文件名](链接)
+                lines.append(f"![{data['filename']}]({data['url']})")
+
+        text = "\n".join(lines)
+        QApplication.clipboard().setText(text)
+        if not silent:
+            desc = "所有链接" if mode == "url" else "Markdown"
+            self.lbl_status.setText(f"已复制 {len(lines)} 条 {desc}")
+            QMessageBox.information(self, "复制成功", f"已将 {len(lines)} 条记录复制为 {desc} 格式。")
+
+    def clear_table(self):
+        self.task_table.setRowCount(0)
+        self.tasks_data = {}
 
 
 if __name__ == "__main__":

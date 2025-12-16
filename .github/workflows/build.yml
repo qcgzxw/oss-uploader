@@ -19,19 +19,19 @@ jobs:
           # --- Windows ---
           - os: windows-latest
             artifact_name: OSS-Uploader-Windows.exe
-            build_cmd: pyinstaller --onefile --windowed --icon=assets/logo.ico --name "OSS-Uploader-Windows" src/main.py
+            build_cmd: pyinstaller --onefile --windowed --icon=assets/icon.ico --add-data "assets/icon.ico:assets" --name "OSS-Uploader-Windows" src/main.py
             asset_path: dist/OSS-Uploader-Windows.exe
           
           # --- macOS ---
           - os: macos-latest
             artifact_name: OSS-Uploader-MacOS
-            build_cmd: pyinstaller --onefile --windowed --icon=assets/logo.icns --name "OSS-Uploader-MacOS" src/main.py
+            build_cmd: pyinstaller --onefile --windowed --icon=assets/icon.icns --add-data "assets/icon.ico:assets" --name "OSS-Uploader-MacOS" src/main.py
             asset_path: dist/OSS-Uploader-MacOS
           
           # --- Linux ---
           - os: ubuntu-latest
             artifact_name: OSS-Uploader-Linux
-            build_cmd: pyinstaller --onefile --windowed --name "OSS-Uploader-Linux" src/main.py
+            build_cmd: pyinstaller --onefile --windowed --add-data "assets/icon.ico:assets" --name "OSS-Uploader-Linux" src/main.py
             asset_path: dist/OSS-Uploader-Linux
 
     steps:

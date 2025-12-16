@@ -9,9 +9,10 @@
 主要解决“快速将文件上传到图床/对象存储并获取链接”的需求，支持拖拽上传、进度显示和自动复制链接。
 
 <div style="display:flex; gap:10px;">
-  <img src="screenshots/截图 2025-12-15 16-07-32.png" width="32%">
-  <img src="screenshots/截图 2025-12-15 16-08-51.png" width="32%">
-  <img src="screenshots/截图 2025-12-15 16-08-56.png" width="32%">
+  <img src="screenshots/截图 2025-12-16 11-08-37.png" width="24%">
+  <img src="screenshots/截图 2025-12-16 11-08-56.png" width="24%">
+  <img src="screenshots/截图 2025-12-15 16-08-51.png" width="24%">
+  <img src="screenshots/截图 2025-12-15 16-08-56.png" width="24%">
 </div>
 
 ## ✨ 功能特性
