@@ -18,21 +18,21 @@ jobs:
         include:
           # --- Windows ---
           - os: windows-latest
-            artifact_name: OSS-Uploader-Windows.exe
-            build_cmd: pyinstaller --onefile --windowed --icon=assets/icon.ico --add-data "assets/icon.ico:assets" --name "OSS-Uploader-Windows" src/main.py
-            asset_path: dist/OSS-Uploader-Windows.exe
+            artifact_name: OSS-Uploader-Windows-${{ github.ref_name }}.exe
+            build_cmd: pyinstaller --onefile --windowed --icon=assets/icon.ico --add-data "assets/icon.ico:assets" --name "OSS-Uploader-Windows-${{ github.ref_name }}" src/main.py
+            asset_path: dist/OSS-Uploader-Windows-${{ github.ref_name }}.exe
           
           # --- macOS ---
           - os: macos-latest
-            artifact_name: OSS-Uploader-MacOS
-            build_cmd: pyinstaller --onefile --windowed --icon=assets/icon.icns --add-data "assets/icon.ico:assets" --name "OSS-Uploader-MacOS" src/main.py
-            asset_path: dist/OSS-Uploader-MacOS
+            artifact_name: OSS-Uploader-MacOS-${{ github.ref_name }}
+            build_cmd: pyinstaller --onefile --windowed --icon=assets/icon.icns --add-data "assets/icon.ico:assets" --name "OSS-Uploader-MacOS-${{ github.ref_name }}" src/main.py
+            asset_path: dist/OSS-Uploader-MacOS-${{ github.ref_name }}
           
           # --- Linux ---
           - os: ubuntu-latest
-            artifact_name: OSS-Uploader-Linux
-            build_cmd: pyinstaller --onefile --windowed --add-data "assets/icon.ico:assets" --name "OSS-Uploader-Linux" src/main.py
-            asset_path: dist/OSS-Uploader-Linux
+            artifact_name: OSS-Uploader-Linux-${{ github.ref_name }}
+            build_cmd: pyinstaller --onefile --windowed --add-data "assets/icon.ico:assets" --name "OSS-Uploader-Linux-${{ github.ref_name }}" src/main.py
+            asset_path: dist/OSS-Uploader-Linux-${{ github.ref_name }}
 
     steps:
       - name: Checkout Code
@@ -41,7 +41,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5  # 升级到 v5
         with:
-          python-version: '3.9'
+          python-version: '3.11'
 
       - name: Install Dependencies
         run: |
