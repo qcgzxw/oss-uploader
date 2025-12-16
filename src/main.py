@@ -288,6 +288,12 @@ class SettingsDialog(QDialog):
     def create_auth_tab(self):
         widget = QWidget()
         form = QFormLayout(widget)
+
+        self.btn_import = QPushButton(" 从剪切板导入配置")
+        self.btn_import.setIcon(self.style().standardIcon(QStyle.SP_FileDialogDetailedView))
+        self.btn_import.clicked.connect(self.import_from_clipboard)
+        form.addRow(self.btn_import)
+
         self.input_ak = QLineEdit(self.config.get('access_key_id'))
         form.addRow("AccessKey ID *:", self.input_ak)
         self.input_sk = QLineEdit(self.config.get('access_key_secret'))
@@ -324,6 +330,33 @@ class SettingsDialog(QDialog):
         layout.addWidget(group_behavior)
         layout.addStretch()
         return widget
+
+    def import_from_clipboard(self):
+        clipboard = QApplication.clipboard()
+        text = clipboard.text()
+
+        # 复用 ConfigManager 的校验逻辑
+        data = ConfigManager.validate_clipboard_data(text)
+
+        if data:
+            # 填充数据到输入框
+            self.input_ak.setText(data.get('access_key_id', ''))
+            self.input_sk.setText(data.get('access_key_secret', ''))
+            self.input_bucket.setText(data.get('bucket_name', ''))
+
+            # 智能处理 Endpoint
+            ep = data.get('endpoint', '')
+            if ep:
+                index = self.combo_endpoint.findData(ep)
+                if index >= 0:
+                    self.combo_endpoint.setCurrentIndex(index)
+                else:
+                    self.combo_endpoint.setCurrentText(ep)
+
+            # 反馈提示
+            QMessageBox.information(self, "导入成功", "✅ 配置已填充，请检查无误后点击保存。")
+        else:
+            QMessageBox.warning(self, "导入失败", "❌ 剪切板内容无效。\n请确保剪切板中包含正确的 JSON 配置格式。")
 
     def get_endpoint(self):
         host = self.combo_endpoint.currentData()
@@ -445,8 +478,33 @@ class MainWindow(QMainWindow):
         self.tasks_data = {}  # 存储 url 用于批量复制 {row_index: {'filename':..., 'url':...}}
 
     def startup_checks(self):
+        # 1. 检查本地配置是否存在
         config = ConfigManager.load_config()
+
+        # 只有在没有配置（AK为空）的情况下才检测剪切板
         if not config.get('access_key_id'):
+            # 2. 读取剪切板
+            clipboard = QApplication.clipboard()
+            text = clipboard.text()
+
+            # 3. 验证剪切板内容是否为有效配置
+            imported_data = ConfigManager.validate_clipboard_data(text)
+
+            if imported_data:
+                # 4. 询问用户是否导入
+                reply = QMessageBox.question(self, "检测到配置",
+                                             "剪切板中似乎包含 OSS 配置信息，是否自动导入？",
+                                             QMessageBox.Yes | QMessageBox.No)
+
+                if reply == QMessageBox.Yes:
+                    # 合并默认配置，防止缺失字段
+                    full_config = ConfigManager.get_default_config()
+                    full_config.update(imported_data)
+                    ConfigManager.save_config(full_config)
+                    QMessageBox.information(self, "成功", "配置已导入！")
+                    return  # 导入成功后不再弹出设置窗口
+
+            # 5. 如果没有导入，则打开设置窗口让用户手动填写
             self.open_settings()
 
     def open_settings(self):
