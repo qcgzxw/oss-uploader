@@ -2,6 +2,8 @@ import sys
 import os
 import json
 import uuid
+from urllib.parse import urlparse
+
 import oss2
 import datetime
 import getpass
@@ -10,14 +12,14 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QMessageBox, QFileDialog, QComboBox, QCheckBox,
                              QTabWidget, QGroupBox, QHBoxLayout, QTableWidget,
                              QTableWidgetItem, QHeaderView, QAbstractItemView,
-                             QProgressBar, QMenu, QAction, QStyle)
+                             QProgressBar, QMenu, QAction, QStyle, QSpinBox)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QUrl
 from PyQt5.QtGui import QFont, QIcon, QDesktopServices, QCursor
 
 # --- 常量配置 ---
 CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".aliyun_oss_uploader_config.json")
 HISTORY_FILE = os.path.join(os.path.expanduser("~"), ".aliyun_oss_history.json")
-VERSION = "1.3.2"
+VERSION = "1.4.0"
 
 
 # 资源路径
@@ -84,9 +86,10 @@ class ConfigManager:
             "endpoint": "oss-cn-hangzhou.aliyuncs.com",
             "bucket_name": "",
             "custom_domain": "",
-            "upload_path": "uploads/{year}/{month}",
+            "upload_path": "uploads/{username}/{year}/{month}",
             "use_random_name": False,
-            "auto_copy": True
+            "auto_copy": True,
+            "url_expire_time": 2592000
         }
 
     @staticmethod
@@ -166,6 +169,15 @@ class BatchUploadThread(QThread):
                 self.error_signal.emit(i, f"初始化失败: {str(e)}")
             self.all_finished_signal.emit()
             return
+        expire_time = int(self.config.get('url_expire_time', 2592000))
+        domain = self.config.get('custom_domain', '').strip()
+        if domain:
+            if not domain.startswith('http'): domain = 'https://' + domain
+            if domain.endswith('/'): domain = domain[:-1]
+        else:
+            # 如果没有自定义域名，使用默认 Endpoint
+            clean_endpoint = self.config['endpoint'].replace('http://', '').replace('https://', '')
+            domain = f"https://{self.config['bucket_name']}.{clean_endpoint}"
 
         for idx, file_path in enumerate(self.file_paths):
             if not self.is_running: break
@@ -182,15 +194,22 @@ class BatchUploadThread(QThread):
                 bucket.put_object_from_file(object_name, file_path, progress_callback=percentage)
 
                 # 生成链接
-                domain = self.config.get('custom_domain', '').strip()
-                if domain:
-                    if not domain.startswith('http'): domain = 'https://' + domain
-                    if domain.endswith('/'): domain = domain[:-1]
-                    url = f"{domain}/{object_name}"
-                else:
-                    clean_endpoint = self.config['endpoint'].replace('http://', '').replace('https://', '')
-                    url = f"https://{self.config['bucket_name']}.{clean_endpoint}/{object_name}"
+                if expire_time > 0:
+                    # == 私有模式：生成签名链接 ==
+                    signed_url = bucket.sign_url('GET', object_name, expire_time, slash_safe=True)
 
+                    # 如果配置了自定义域名，我们需要替换掉官方签名的 Host 部分
+                    if self.config.get('custom_domain', '').strip():
+                        if '?' in signed_url:
+                            query_params = signed_url.split('?')[1]
+                            url = f"{domain}/{object_name}?{query_params}"
+                        else:
+                            url = signed_url
+                    else:
+                        url = signed_url
+                else:
+                    # == 公开模式：直接拼接 ==
+                    url = f"{domain}/{object_name}"
                 HistoryManager.add_record(file_name, url)
                 self.success_signal.emit(idx, file_name, url)
 
@@ -327,6 +346,22 @@ class SettingsDialog(QDialog):
         layout.addWidget(group_path)
         group_behavior = QGroupBox("选项")
         vbox = QVBoxLayout(group_behavior)
+        time_layout = QHBoxLayout()
+        self.spin_expire = QSpinBox()
+        self.spin_expire.setRange(0, 315360000)  # 0 到 10年
+        self.spin_expire.setValue(int(self.config.get('url_expire_time', 2592000)))
+        self.spin_expire.setFixedWidth(120)
+
+        lbl_hint = QLabel("(0 = 不过期/公开链接)")
+        lbl_hint.setStyleSheet("color: gray;")
+
+        time_layout.addWidget(QLabel("链接有效期:"))
+        time_layout.addWidget(self.spin_expire)
+        time_layout.addWidget(QLabel("秒"))
+        time_layout.addWidget(lbl_hint)
+        time_layout.addStretch()
+
+        vbox.addLayout(time_layout)
         self.check_random = QCheckBox("启用随机文件名 (UUID)")
         self.check_random.setChecked(self.config.get('use_random_name', False))
         self.check_copy = QCheckBox("自动复制第一个文件的链接")
@@ -394,7 +429,8 @@ class SettingsDialog(QDialog):
             "custom_domain": self.input_domain.text().strip(),
             "upload_path": self.input_path.text().strip(),
             "use_random_name": self.check_random.isChecked(),
-            "auto_copy": self.check_copy.isChecked()
+            "auto_copy": self.check_copy.isChecked(),
+            "url_expire_time": self.spin_expire.value()
         }
         ConfigManager.save_config(data)
         self.accept()
