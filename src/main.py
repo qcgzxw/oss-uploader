@@ -17,7 +17,7 @@ from PyQt5.QtGui import QFont, QIcon, QDesktopServices, QCursor
 # --- 常量配置 ---
 CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".aliyun_oss_uploader_config.json")
 HISTORY_FILE = os.path.join(os.path.expanduser("~"), ".aliyun_oss_history.json")
-VERSION = "1.3.1"
+VERSION = "1.3.2"
 
 
 # 资源路径
@@ -305,7 +305,13 @@ class SettingsDialog(QDialog):
         self.combo_endpoint.setEditable(True)
         for name, host in ALIYUN_ENDPOINTS: self.combo_endpoint.addItem(f"{name} ({host})", host)
         curr = self.config.get('endpoint', '')
-        if curr: self.combo_endpoint.setCurrentText(curr)
+        if curr:
+            clean_host = curr.replace("http://", "").replace("https://", "").strip("/")
+            index = self.combo_endpoint.findData(clean_host)
+            if index >= 0:
+                self.combo_endpoint.setCurrentIndex(index)
+            else:
+                self.combo_endpoint.setCurrentText(curr)
         form.addRow("Endpoint *:", self.combo_endpoint)
         self.input_domain = QLineEdit(self.config.get('custom_domain'))
         form.addRow("自定义域名:", self.input_domain)
