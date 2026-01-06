@@ -2,6 +2,7 @@ import sys
 import os
 import json
 import uuid
+from urllib.parse import quote
 
 import oss2
 import datetime
@@ -18,7 +19,7 @@ from PyQt5.QtGui import QFont, QIcon, QDesktopServices, QCursor, QColor
 # --- 常量配置 ---
 CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".aliyun_oss_uploader_config.json")
 HISTORY_FILE = os.path.join(os.path.expanduser("~"), ".aliyun_oss_history.json")
-VERSION = "1.5.0"
+VERSION = "1.5.1"
 
 STYLESHEET = """
 /* === 全局基础设置 === */
@@ -815,8 +816,10 @@ class MainWindow(QMainWindow):
             if pbar: pbar.setValue(percent)
 
     def on_row_success(self, idx, fname, url):
+        # 链接encoder
+        safe_url = quote(url,safe='/:?=')
         # 更新链接列
-        item_url = QTableWidgetItem(url)
+        item_url = QTableWidgetItem(safe_url)
         item_url.setForeground(Qt.blue)
         self.task_table.setItem(idx, 2, item_url)
 
@@ -832,10 +835,10 @@ class MainWindow(QMainWindow):
                     btn.clicked.disconnect()
                 except:
                     pass
-                btn.clicked.connect(lambda: self.copy_single(url, btn))
+                btn.clicked.connect(lambda: self.copy_single(safe_url, btn))
 
         # 记录数据
-        self.tasks_data[idx] = {'filename': fname, 'url': url}
+        self.tasks_data[idx] = {'filename': fname, 'url': safe_url}
 
     def on_row_error(self, idx, msg):
         self.task_table.setItem(idx, 2, QTableWidgetItem(f"失败: {msg}"))
