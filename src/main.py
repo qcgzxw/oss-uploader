@@ -816,8 +816,8 @@ class MainWindow(QMainWindow):
             if pbar: pbar.setValue(percent)
 
     def on_row_success(self, idx, fname, url):
-        # 链接encoder
-        safe_url = quote(url,safe='/:?=')
+        # 只处理#,还有?没处理
+        safe_url = url.replace('#', '%23')
         # 更新链接列
         item_url = QTableWidgetItem(safe_url)
         item_url.setForeground(Qt.blue)
