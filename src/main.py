@@ -835,7 +835,7 @@ class MainWindow(QMainWindow):
                     btn.clicked.disconnect()
                 except:
                     pass
-                btn.clicked.connect(lambda: self.copy_single(safe_url, btn))
+                btn.clicked.connect(lambda u=safe_url, b=btn: self.copy_single(u, b))
 
         # 记录数据
         self.tasks_data[idx] = {'filename': fname, 'url': safe_url}
