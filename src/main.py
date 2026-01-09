@@ -19,7 +19,7 @@ from PyQt5.QtGui import QFont, QIcon, QDesktopServices, QCursor, QColor
 # --- 常量配置 ---
 CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".aliyun_oss_uploader_config.json")
 HISTORY_FILE = os.path.join(os.path.expanduser("~"), ".aliyun_oss_history.json")
-VERSION = "1.5.1"
+VERSION = "1.5.4"
 
 STYLESHEET = """
 /* === 全局基础设置 === */
@@ -835,7 +835,7 @@ class MainWindow(QMainWindow):
                     btn.clicked.disconnect()
                 except:
                     pass
-                btn.clicked.connect(lambda: self.copy_single(safe_url, btn))
+                btn.clicked.connect(lambda checked, u=safe_url, b=btn: self.copy_single(u, b))
 
         # 记录数据
         self.tasks_data[idx] = {'filename': fname, 'url': safe_url}
