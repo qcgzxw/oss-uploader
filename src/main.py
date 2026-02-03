@@ -20,7 +20,7 @@ from PyQt5.QtGui import QFont, QIcon, QDesktopServices, QCursor, QColor
 # --- 常量配置 ---
 CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".aliyun_oss_uploader_config.json")
 HISTORY_FILE = os.path.join(os.path.expanduser("~"), ".aliyun_oss_history.json")
-VERSION = "1.5.4"
+VERSION = "1.5.5"
 
 STYLESHEET = """
 /* === 全局基础设置 === */
