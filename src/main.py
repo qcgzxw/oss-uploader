@@ -804,6 +804,17 @@ class MainWindow(QMainWindow):
 
         self.lbl_status.setText(f"正在上传 {len(file_paths)} 个文件...")
 
+        # === 断开旧的信号连接，防止重复上传时累积连接 ===
+        if hasattr(self, 'thread') and self.thread is not None:
+            try:
+                self.thread.progress_signal.disconnect(self.update_row_progress)
+                self.thread.success_signal.disconnect(self.on_row_success)
+                self.thread.error_signal.disconnect(self.on_row_error)
+                self.thread.all_finished_signal.disconnect(self.on_all_finished)
+            except TypeError:
+                # 如果信号未连接，disconnect 会抛出 TypeError，忽略即可
+                pass
+
         self.thread = BatchUploadThread(file_paths, config)
         self.thread.progress_signal.connect(self.update_row_progress)
         self.thread.success_signal.connect(self.on_row_success)
