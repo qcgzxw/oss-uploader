@@ -2,6 +2,7 @@ import sys
 import os
 import json
 import uuid
+from functools import partial
 from urllib.parse import quote
 
 import oss2
@@ -790,9 +791,11 @@ class MainWindow(QMainWindow):
             self.task_table.setCellWidget(i, 1, container)
             # 3. 链接 (空)
             self.task_table.setItem(i, 2, QTableWidgetItem("等待中..."))
-            # 4. 操作 (禁用)
+            # 4. 操作 (禁用，但预先绑定点击事件)
             btn = QPushButton("复制")
             btn.setEnabled(False)
+            # 使用 functools.partial 固定索引和按钮引用，避免闭包问题
+            btn.clicked.connect(partial(self._on_copy_button_clicked, i, btn))
             container_btn = QWidget()
             bl = QVBoxLayout(container_btn)
             bl.setContentsMargins(2, 2, 2, 2)
@@ -823,22 +826,32 @@ class MainWindow(QMainWindow):
         item_url.setForeground(Qt.blue)
         self.task_table.setItem(idx, 2, item_url)
 
-        # 更新按钮
+        # 记录数据
+        self.tasks_data[idx] = {'filename': fname, 'url': safe_url}
+
+        # 启用按钮（点击事件已在初始化时绑定）
         widget = self.task_table.cellWidget(idx, 3)
         if widget:
             btn = widget.findChild(QPushButton)
             if btn:
                 btn.setEnabled(True)
                 btn.setCursor(Qt.PointingHandCursor)
-                # 绑定复制
-                try:
-                    btn.clicked.disconnect()
-                except:
-                    pass
-                btn.clicked.connect(lambda checked, u=safe_url, b=btn: self.copy_single(u, b))
 
-        # 记录数据
-        self.tasks_data[idx] = {'filename': fname, 'url': safe_url}
+    def _on_copy_button_clicked(self, idx, btn):
+        """处理复制按钮点击事件"""
+        if idx not in self.tasks_data:
+            return
+        url = self.tasks_data[idx]['url']
+        self._copy_to_clipboard(url, btn)
+
+    def _copy_to_clipboard(self, text, btn=None):
+        """复制文本到剪切板，可选显示按钮反馈"""
+        QApplication.clipboard().setText(text)
+        if btn:
+            original_text = btn.text()
+            btn.setText("已复制")
+            # 使用弱引用避免 lambda 持有按钮引用导致内存问题
+            QTimer.singleShot(1000, lambda b=btn, t=original_text: b.setText(t) if b else None)
 
     def on_row_error(self, idx, msg):
         self.task_table.setItem(idx, 2, QTableWidgetItem(f"失败: {msg}"))
@@ -854,13 +867,8 @@ class MainWindow(QMainWindow):
             self.copy_all(mode="url", silent=True)
             self.lbl_status.setText("✅ 已自动复制链接到剪切板")
 
-    def copy_single(self, url, btn):
-        QApplication.clipboard().setText(url)
-        original_text = btn.text()
-        btn.setText("已复制")
-        QTimer.singleShot(1000, lambda: btn.setText(original_text))
-
     def copy_all(self, mode="url", silent=False):
+        """批量复制所有文件的链接"""
         if not self.tasks_data: return
 
         # 按索引排序，保证顺序和上传顺序一致
@@ -875,7 +883,8 @@ class MainWindow(QMainWindow):
                 lines.append(f"![{data['filename']}]({data['url']})")
 
         text = "\n".join(lines)
-        QApplication.clipboard().setText(text)
+        self._copy_to_clipboard(text)
+
         if not silent:
             desc = "所有链接" if mode == "url" else "Markdown"
             self.lbl_status.setText(f"已复制 {len(lines)} 条 {desc}")
