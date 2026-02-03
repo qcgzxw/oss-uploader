@@ -798,6 +798,9 @@ class MainWindow(QMainWindow):
         config = ConfigManager.load_config()
         if not config.get('access_key_id'): return QMessageBox.warning(self, "错误", "请先配置")
 
+        if not file_paths:
+            return  # Empty file list, nothing to do
+
         self.drop_area.setEnabled(False)
         self.tasks_data = {}  # 重置数据
         self.task_table.setRowCount(0)  # 清空旧表
@@ -949,7 +952,7 @@ class MainWindow(QMainWindow):
         这样可以防止窗口关闭时线程仍在后台运行。
         """
         # 停止正在运行的上传线程
-        if hasattr(self, 'thread') and self.thread is not None:
+        if hasattr(self, 'thread') and self.thread is not None and hasattr(self.thread, 'isRunning'):
             if self.thread.isRunning():
                 self.thread.stop()
                 self.thread.wait(2000)  # 等待最多 2 秒

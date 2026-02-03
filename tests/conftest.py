@@ -10,3 +10,10 @@ def qapp():
     else:
         app = QApplication.instance()
     return app
+
+@pytest.fixture
+def qtbot(qapp, request):
+    """创建 qtbot fixture 用于 Qt 测试"""
+    from pytestqt.qtbot import QtBot
+    result = QtBot(request)
+    return result
