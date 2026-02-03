@@ -180,7 +180,11 @@ class HistoryManager:
             try:
                 with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
                     return json.load(f)
-            except:
+            except json.JSONDecodeError:
+                # 历史记录文件损坏，返回空列表
+                return []
+            except (IOError, OSError):
+                # 文件读取错误，返回空列表
                 return []
         return []
 
@@ -223,7 +227,13 @@ class ConfigManager:
                     default = ConfigManager.get_default_config()
                     default.update(config)
                     return default
-            except:
+            except json.JSONDecodeError as e:
+                # JSON 解析错误，返回默认配置
+                print(f"配置文件解析失败: {e}")
+                return ConfigManager.get_default_config()
+            except (IOError, OSError) as e:
+                # 文件读取错误，返回默认配置
+                print(f"配置文件读取失败: {e}")
                 return ConfigManager.get_default_config()
         return ConfigManager.get_default_config()
 
@@ -285,8 +295,20 @@ class BatchUploadThread(QThread):
             endpoint = self.config['endpoint']
             if not endpoint.startswith('http'): endpoint = 'https://' + endpoint
             bucket = oss2.Bucket(auth, endpoint, self.config['bucket_name'])
+        except oss2.exceptions.OssError as e:
+            # OSS 认证或初始化错误
+            for i in range(len(self.file_paths)):
+                self.error_signal.emit(i, f"OSS 初始化失败: {str(e)}")
+            self.all_finished_signal.emit()
+            return
+        except KeyError as e:
+            # 配置缺失必需字段
+            for i in range(len(self.file_paths)):
+                self.error_signal.emit(i, f"配置缺失: {str(e)}")
+            self.all_finished_signal.emit()
+            return
         except Exception as e:
-            # 如果初始化失败，所有文件都报错
+            # 其他未知错误
             for i in range(len(self.file_paths)):
                 self.error_signal.emit(i, f"初始化失败: {str(e)}")
             self.all_finished_signal.emit()
