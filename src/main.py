@@ -638,6 +638,7 @@ class MainWindow(QMainWindow):
 
         QTimer.singleShot(100, self.startup_checks)
         self.tasks_data = {}
+        self.thread = None  # 初始化线程属性，避免获取到 QObject.thread() 方法
 
     def setup_ui(self):
         central = QWidget()
