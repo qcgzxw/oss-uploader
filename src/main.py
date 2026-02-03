@@ -363,7 +363,16 @@ class BatchUploadThread(QThread):
         self.all_finished_signal.emit()
 
     def stop(self):
+        """停止上传线程并清理资源
+
+        设置 is_running 标志位，让上传循环在下一次迭代时退出。
+        注意：OSS SDK 不支持中断正在进行的上传，但我们可以设置标志位
+        让循环尽快退出。
+        """
         self.is_running = False
+        # 如果需要，可以在这里添加额外的清理逻辑
+        # 注意：OSS SDK 不支持中断正在进行的上传，
+        # 但我们可以设置标志位让循环尽快退出
 
 
 # --- 历史记录窗口 ---
@@ -826,8 +835,14 @@ class MainWindow(QMainWindow):
 
         self.lbl_status.setText(f"正在上传 {len(file_paths)} 个文件...")
 
-        # === 断开旧的信号连接，防止重复上传时累积连接 ===
+        # === 清理旧线程和断开信号连接，防止重复上传时累积连接 ===
         if hasattr(self, 'thread') and self.thread is not None:
+            # 如果旧线程仍在运行，先停止它
+            if self.thread.isRunning():
+                self.thread.stop()
+                self.thread.wait(2000)  # 等待最多 2 秒
+
+            # 断开信号连接
             try:
                 self.thread.progress_signal.disconnect(self.update_row_progress)
                 self.thread.success_signal.disconnect(self.on_row_success)
@@ -926,6 +941,20 @@ class MainWindow(QMainWindow):
     def clear_table(self):
         self.task_table.setRowCount(0)
         self.tasks_data = {}
+
+    def closeEvent(self, event):
+        """窗口关闭时清理资源
+
+        停止正在运行的上传线程，等待最多 2 秒让线程优雅退出。
+        这样可以防止窗口关闭时线程仍在后台运行。
+        """
+        # 停止正在运行的上传线程
+        if hasattr(self, 'thread') and self.thread is not None:
+            if self.thread.isRunning():
+                self.thread.stop()
+                self.thread.wait(2000)  # 等待最多 2 秒
+        # 接受关闭事件
+        event.accept()
 
 
 if __name__ == "__main__":
